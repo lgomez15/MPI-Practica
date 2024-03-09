@@ -5,7 +5,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX 100
+#define MAX 999999
+#define N_NUMEROS 20
 
 /*INICIO definicion de tipos de proceso*/
 #define PES_RANK 0 // Asumimos que el PES tiene el rango 0
@@ -23,21 +24,40 @@
 #define DISP_REQ 5
 #define DISP_RES 6
 #define RESPUESTA_ADIVINANZA 7
-#define FINALIZAR 8
+#define ESTADISTICAS 8
+#define INSTRUCCION 9
 /*INICIO definicion de tipos de comunicacion*/
 
 /*INICIO definicion de estados*/
 #define JUGANDO 11
+#define INTERMEDIO 12
+#define FINALIZAR 13
 /*FIN definicion de estados*/
+
+
+
+/*Struct con float para el tiempo, numero de intentos totales, numero de send, de recv y de probes*/
+MPI_Datatype Estadisticas_mpi;
+
+typedef struct {
+    float tiempo;
+    int intentos;
+    int send;
+    int recv;
+    int probes;
+    int tipo;
+    int numero;
+} Estadisticas;
+/*FIN struct con float para el tiempo, numero de intentos totales, numero de send, de recv y de probes*/
+
 
 /*INICIO funciones del proceso PES*/
 void PES_Code(int world_size, int num_pg, int num_pa);
 /*FIN funciones del proceso PES*/
 
-
 /*INICIO funciones del proceso PG*/
 void PG_Code(int my_rank, int world_size);
-int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids);
+int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stats);
 /*FIN funciones del proceso PES*/
 
 
@@ -64,6 +84,20 @@ int main(int argc, char** argv) {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
+    // Definir un tipo de dato MPI correspondiente al struct Estadisticas
+    MPI_Datatype types[7] = {MPI_FLOAT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
+    int block_lengths[7] = {1, 1, 1, 1, 1, 1, 1};
+    MPI_Aint offsets[7];
+    offsets[0] = offsetof(Estadisticas, tiempo);
+    offsets[1] = offsetof(Estadisticas, intentos);
+    offsets[2] = offsetof(Estadisticas, send);
+    offsets[3] = offsetof(Estadisticas, recv);
+    offsets[4] = offsetof(Estadisticas, probes);
+    offsets[5] = offsetof(Estadisticas, tipo);
+    offsets[6] = offsetof(Estadisticas, numero);
+    MPI_Type_create_struct(7, block_lengths, offsets, types, &Estadisticas_mpi);
+    MPI_Type_commit(&Estadisticas_mpi);
+
     // Inicializar la semilla para la generación de números aleatorios
     srand(time(NULL) + my_rank);
 
@@ -86,8 +120,11 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
 void PES_Code(int world_size, int num_pg, int num_pa) {
-    
+
+    //array de estadisticas del tamano de N_NUMEROS
+    Estadisticas estadisticas[N_NUMEROS];
     int num_pi = world_size - (num_pa + num_pg);
     
     // Asignar y enviar roles a PG y PA
@@ -118,14 +155,46 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
         MPI_Send(array_pa_ids, num_pa, MPI_INT, i, CONF_DATA_2, MPI_COMM_WORLD); // Corrección aplicada
     }
 
-	//numero random para cada PG en el rango MAX
+    int adivinados = 0;
 	int random;
+        
 	for(int i = 1; i <= num_pg; i++) {
 		random = rand() % MAX;
 		MPI_Send(&random, 1, MPI_INT, i, CONF_DATA_3, MPI_COMM_WORLD);
 	}
 
+    Estadisticas received_stats;
+    int instruccion;
+
+    while(1){ 
+        MPI_Status status;
+        MPI_Recv(&received_stats, 1, Estadisticas_mpi, MPI_ANY_SOURCE, ESTADISTICAS, MPI_COMM_WORLD, &status);
+        //imprimir estadisticas
+        estadisticas[adivinados] = received_stats;
+        adivinados++;
+
+        if(adivinados == N_NUMEROS){
+            instruccion = 0;
+            for(int i = 1; i <= num_pg; i++) {
+                MPI_Send(&instruccion, 1, MPI_INT, i, INSTRUCCION, MPI_COMM_WORLD);
+            }
+            break;
+        }
+
+        //enviar instruccion
+        instruccion = 1;
+        MPI_Send(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD);
+
+        //enviar el siguiente numero
+        random = rand() % MAX;
+        MPI_Send(&random, 1, MPI_INT, status.MPI_SOURCE, CONF_DATA_3, MPI_COMM_WORLD);
+        
+    }
+
+    //
+
     free(array_pa_ids); // No olvides liberar la memoria
+    return;
 }
 
 
@@ -135,6 +204,17 @@ void PG_Code(int my_rank, int world_size) {
     int proc_adv;
 	int num_pa;
     int numero;
+    int instruccion;
+
+    // estadiaticas
+    Estadisticas stats;
+    stats.tiempo = 0;
+    stats.intentos = 0;
+    stats.send = 0;
+    stats.recv = 0;
+    stats.probes = 0;
+    stats.tipo = PG_TYPE;
+    stats.numero = 0;
 
 	//recibimos el tamaño de los PA
 	MPI_Recv(&num_pa, 1, MPI_INT, PES_RANK, CONF_DATA_1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -146,10 +226,10 @@ void PG_Code(int my_rank, int world_size) {
 	//recibimos el número numero_adivinar
 	int numero_adivinar;
 	MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	printf("PG %d ha recibido el número numero_adivinar %d\n", my_rank, numero_adivinar);	
 
-    proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids);
-    printf("PG %d ha sido emparejado con PA %d####\n", my_rank, proc_adv);
+    //solicitar asignacion, y ahora le pasamos los stats
+    proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids, &stats);
+   
     estado = JUGANDO;
 
 
@@ -162,56 +242,101 @@ void PG_Code(int my_rank, int world_size) {
             while(estado == JUGANDO)
             {
                 MPI_Recv(&numero, 1, MPI_INT, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                stats.recv++;
                 if(numero == numero_adivinar){
                     char respuesta = '=';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
-                    estado = FINALIZAR;
-                    //printf("PG %d ha adivinado el número %d\n", my_rank, numero);
-                    return;
+                    stats.send++;
+                    estado = INTERMEDIO;
+                    
+
                 }else if(numero < numero_adivinar){
                     char respuesta = '+';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
+                    stats.intentos++;
+                    stats.send++;
                 }else if(numero > numero_adivinar){
                     char respuesta = '-';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
+                    stats.intentos++;
+                    stats.send++;
                 }
             }
             break;
-        
-        default:
+        case INTERMEDIO:
+            //enviar estadisticas
+            stats.tipo = PG_TYPE;
+            stats.numero = numero_adivinar;
+            MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
+            stats.send++;
+
+            //recibir instruccion
+            MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            stats.recv++;
+
+            if(instruccion == 1){
+                estado = JUGANDO;
+                //resetear las estadisticas
+                stats.tiempo = 0;
+                stats.intentos = 0;
+                stats.send = 0;
+                stats.recv = 0;
+                stats.probes = 0;
+                stats.tipo = PG_TYPE;
+                stats.numero = 0;
+
+                //recibir el número numero_adivinar
+                MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                //solicitar asignacion
+                proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids, &stats);
+
+
+
+            }else{
+                estado = FINALIZAR;
+            }
+
             break;
+            case FINALIZAR:
+                return;
+
+            break;        
+        default:
+            printf("Error en el estado\n");
+        break;
         }
     }
     
 }
 
-int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids) {
-    int asignado = 0; // Flag para controlar si se ha asignado
-    int respuesta; // Almacena la respuesta de los PA
-    int proc_adv = -1; // Identificador del proceso asignado, inicializado a -1 para indicar que no hay ninguno asignado todavía
+int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stats) {
+    int asignado = 0; 
+    int respuesta; 
+    int proc_adv = -1; 
+    MPI_Request request;
+    MPI_Status status;
 
     while(!asignado) {
         for(int i = 0; i < num_pa; i++) {
             // Envía solicitud de disponibilidad a cada PA
             MPI_Send(&my_rank, 1, MPI_INT, pa_ids[i], DISP_REQ, MPI_COMM_WORLD);
+            stats->send++;
+
             // Espera la respuesta de cada PA
             MPI_Recv(&respuesta, 1, MPI_INT, pa_ids[i], DISP_RES, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            stats->recv++;
 
-            // Verifica la respuesta
-            if(respuesta == 0) { // Si hay disponibilidad
-                asignado = 1; // Marca como asignado
-                proc_adv = pa_ids[i]; // Guarda el identificador del PA asignado
+             if(respuesta == 0) { 
+                asignado = 1; 
+                proc_adv = pa_ids[i]; 
 
-                //cancelar all pending requests
-
-                
-
-                break; // Sale del bucle for ya que se ha asignado
+                break; 
             }
         }
     }
 
-    return proc_adv; // Devuelve el identificador del proceso asignado
+    return proc_adv; 
 }
 
 
@@ -220,68 +345,89 @@ void PA_Code(int my_rank) {
     int fin = 1;
     MPI_Status status;
     int proc_ges = -1;
-    int limite_inferior = 0;
-    int limite_superior = MAX;
+    int limite_inferior;
+    int limite_superior;
     char respuesta;
-    int intento, numIntentos;
-    int x = 50;
+    int intento;
+    int x = MAX / 2;
+
+    Estadisticas stats;
+    stats.tiempo = 0;
+    stats.intentos = 0;
+    stats.send = 0;
+    stats.recv = 0;
+    stats.probes = 0;
+    stats.tipo = PA_TYPE;
+    
 
     while(fin != 0)
     {
         MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG,MPI_COMM_WORLD, &status);
-        printf("@@@@");
+        stats.probes++;
         switch(status.MPI_TAG)
         {
+          
             case DISP_REQ:
+                MPI_Recv(&proc_ges,1,MPI_INT,status.MPI_SOURCE, DISP_REQ, MPI_COMM_WORLD,&status);
+                stats.recv++;
                 if(disponible == 0)
-                {
-                    printf("@@@@");
-                    MPI_Recv(&proc_ges,1,MPI_INT,status.MPI_SOURCE, DISP_REQ, MPI_COMM_WORLD,&status);
-                    printf("????");
+                {         
+                    //printf("PA %d ha aceptado con PG %d\n", my_rank, proc_ges);
                     //enviar un 0 para indicar que esta disponible
                     MPI_Send(&disponible,1,MPI_INT,proc_ges,DISP_RES,MPI_COMM_WORLD);
-
-                    //imprimir con quien nos emparejamos
-                    //printf("PA %d ha sido emparejado con PG %d\n", my_rank, proc_ges);
+                    stats.send++;
+                    disponible = 1;
+                    limite_inferior = 0;
+                    limite_superior = MAX;
 
                     //enviamos el primer intento
                     MPI_Send(&x, 1, MPI_INT, proc_ges, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
+                    stats.send++;
 
-                    //cambiar el estado a ocupado
-                    disponible = 1;
-                    numIntentos = 1;
+                    
 
                 }else{
                     //enviar un 1 para indicar que esta ocupado
                     MPI_Send(&disponible,1,MPI_INT,status.MPI_SOURCE,DISP_RES,MPI_COMM_WORLD);
+                    stats.send++;
                 }
             break;
             case RESPUESTA_ADIVINANZA: 
                 
-                intento = (limite_inferior + limite_superior) / 2;               
+                intento = (limite_inferior + limite_superior) / 2;      
                 while (limite_inferior <= limite_superior)
                 {
-                    
-
                     //recibir la respuesta
                     MPI_Recv(&respuesta, 1, MPI_CHAR, status.MPI_SOURCE, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD, &status);
+                    stats.recv++;
                     if (respuesta == '=') {
-                        printf("PA %d ha adivinado el número %d en %d intentos\n", my_rank, intento, numIntentos);
-                       return;
+                        //printf("PA %d ha adivinado el número %d en %d intentos\n", my_rank, intento, numIntentos);   
+                        disponible = 0;
+                        break;
                     } else if (respuesta == '+') {
                         limite_inferior = intento + 1;
+                        stats.intentos++;
                     } else if(respuesta == '-'){
                         limite_superior = intento - 1;
+                        stats.intentos++;
                     }
 
                     intento = (limite_inferior + limite_superior) / 2;
 
                     //enviar el intento
                     MPI_Send(&intento, 1, MPI_INT, status.MPI_SOURCE, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
-                    numIntentos++;
+                    stats.send++;
+                    
+                    break;
                     
                 }
-
+             break;
+            case INSTRUCCION:
+                MPI_Recv(&fin, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD, &status);
+                if(fin == 0){
+                    //recibimos
+                    return;
+                }
             break;
         }
 
