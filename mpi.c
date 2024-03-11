@@ -47,6 +47,7 @@ typedef struct {
     int probes;
     int tipo;
     int numero;
+    int proceso;
 } Estadisticas;
 /*FIN struct con float para el tiempo, numero de intentos totales, numero de send, de recv y de probes*/
 
@@ -85,9 +86,9 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
     // Definir un tipo de dato MPI correspondiente al struct Estadisticas
-    MPI_Datatype types[7] = {MPI_FLOAT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
-    int block_lengths[7] = {1, 1, 1, 1, 1, 1, 1};
-    MPI_Aint offsets[7];
+    MPI_Datatype types[8] = {MPI_FLOAT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
+    int block_lengths[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    MPI_Aint offsets[8];
     offsets[0] = offsetof(Estadisticas, tiempo);
     offsets[1] = offsetof(Estadisticas, intentos);
     offsets[2] = offsetof(Estadisticas, send);
@@ -95,6 +96,7 @@ int main(int argc, char** argv) {
     offsets[4] = offsetof(Estadisticas, probes);
     offsets[5] = offsetof(Estadisticas, tipo);
     offsets[6] = offsetof(Estadisticas, numero);
+    offsets[7] = offsetof(Estadisticas, proceso);
     MPI_Type_create_struct(7, block_lengths, offsets, types, &Estadisticas_mpi);
     MPI_Type_commit(&Estadisticas_mpi);
 
@@ -124,7 +126,9 @@ int main(int argc, char** argv) {
 void PES_Code(int world_size, int num_pg, int num_pa) {
 
     //array de estadisticas del tamano de N_NUMEROS
-    Estadisticas estadisticas[N_NUMEROS];
+    Estadisticas estadisticas_pg[N_NUMEROS];
+    Estadisticas estadisticas_pa[num_pa];
+    Estadisticas estadisticas_pi;
     int num_pi = world_size - (num_pa + num_pg);
     
     // Asignar y enviar roles a PG y PA
@@ -169,8 +173,7 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
     while(1){ 
         MPI_Status status;
         MPI_Recv(&received_stats, 1, Estadisticas_mpi, MPI_ANY_SOURCE, ESTADISTICAS, MPI_COMM_WORLD, &status);
-        //imprimir estadisticas
-        estadisticas[adivinados] = received_stats;
+        estadisticas_pg[adivinados] = received_stats;
         adivinados++;
 
         if(adivinados == N_NUMEROS){
@@ -191,7 +194,41 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
         
     }
 
-    //
+    // enviar instruccion de finalizar a los procesos PA
+    instruccion = 0;
+    for(int i = num_pg + 1; i <= num_pg + num_pa; i++) {
+        MPI_Send(&instruccion, 1, MPI_INT, i, INSTRUCCION, MPI_COMM_WORLD);
+
+        //recibir estadisticas
+        MPI_Recv(&received_stats, 1, Estadisticas_mpi, i, ESTADISTICAS, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        estadisticas_pa[i - num_pg - 1] = received_stats;
+    }
+
+    //enviar instruccion de finalizar a los procesos PI
+    for(int i = num_pg + num_pa + 1; i < world_size; i++) {
+        MPI_Send(&instruccion, 1, MPI_INT, i, INSTRUCCION, MPI_COMM_WORLD);
+
+        //recibir estadisticas
+        MPI_Recv(&received_stats, 1, Estadisticas_mpi, i, ESTADISTICAS, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        estadisticas_pi = received_stats;
+    }
+    
+
+    //imprimir estadisticas
+    printf("Estadisticas de los PG\n");
+    for(int i = 0; i < N_NUMEROS; i++){
+        printf("PG %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", estadisticas_pg[i].proceso, estadisticas_pg[i].tiempo, estadisticas_pg[i].intentos, estadisticas_pg[i].send, estadisticas_pg[i].recv, estadisticas_pg[i].probes, estadisticas_pg[i].numero);
+    }
+
+    printf("Estadisticas de los PA\n");
+    for(int i = 0; i < num_pa; i++){
+        printf("PA %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", array_pa_ids[i], estadisticas_pa[i].tiempo, estadisticas_pa[i].intentos, estadisticas_pa[i].send, estadisticas_pa[i].recv, estadisticas_pa[i].probes, estadisticas_pa[i].numero);
+    }
+
+    printf("Estadisticas de los PI\n");
+    for (int i = num_pg + num_pa + 1; i < world_size; i++) {
+        printf("PI %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", i, estadisticas_pi.tiempo, estadisticas_pi.intentos, estadisticas_pi.send, estadisticas_pi.recv, estadisticas_pi.probes, estadisticas_pi.numero);
+    }
 
     free(array_pa_ids); // No olvides liberar la memoria
     return;
@@ -208,12 +245,13 @@ void PG_Code(int my_rank, int world_size) {
 
     // estadiaticas
     Estadisticas stats;
+    stats.proceso = my_rank;
+    stats.tipo = PG_TYPE;
     stats.tiempo = 0;
     stats.intentos = 0;
     stats.send = 0;
     stats.recv = 0;
     stats.probes = 0;
-    stats.tipo = PG_TYPE;
     stats.numero = 0;
 
 	//recibimos el tamaño de los PA
@@ -226,6 +264,8 @@ void PG_Code(int my_rank, int world_size) {
 	//recibimos el número numero_adivinar
 	int numero_adivinar;
 	MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    stats.numero = numero_adivinar;
+
 
     //solicitar asignacion, y ahora le pasamos los stats
     proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids, &stats);
@@ -265,14 +305,11 @@ void PG_Code(int my_rank, int world_size) {
             break;
         case INTERMEDIO:
             //enviar estadisticas
-            stats.tipo = PG_TYPE;
-            stats.numero = numero_adivinar;
-            MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
             stats.send++;
-
+            stats.recv++;
+            MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
             //recibir instruccion
             MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            stats.recv++;
 
             if(instruccion == 1){
                 estado = JUGANDO;
@@ -282,11 +319,11 @@ void PG_Code(int my_rank, int world_size) {
                 stats.send = 0;
                 stats.recv = 0;
                 stats.probes = 0;
-                stats.tipo = PG_TYPE;
                 stats.numero = 0;
 
                 //recibir el número numero_adivinar
                 MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                stats.numero = numero_adivinar;
 
                 //solicitar asignacion
                 proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids, &stats);
@@ -341,6 +378,7 @@ int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stat
 
 
 void PA_Code(int my_rank) {
+    int instruccion;
     int disponible = 0;
     int fin = 1;
     MPI_Status status;
@@ -352,13 +390,14 @@ void PA_Code(int my_rank) {
     int x = MAX / 2;
 
     Estadisticas stats;
+    stats.proceso = my_rank;
+    stats.tipo = PA_TYPE;
     stats.tiempo = 0;
     stats.intentos = 0;
     stats.send = 0;
     stats.recv = 0;
     stats.probes = 0;
-    stats.tipo = PA_TYPE;
-    
+    stats.numero = 0;
 
     while(fin != 0)
     {
@@ -423,9 +462,10 @@ void PA_Code(int my_rank) {
                 }
              break;
             case INSTRUCCION:
-                MPI_Recv(&fin, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD, &status);
-                if(fin == 0){
-                    //recibimos
+                MPI_Recv(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD, &status);
+                if(instruccion == 0){
+                    //enviar estadisticas
+                    MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
                     return;
                 }
             break;
@@ -438,8 +478,26 @@ void PA_Code(int my_rank) {
 
 
 void PI_Code(int my_rank) {
-	//print my rank and type
-	//printf("PI %d\n", my_rank);
+    Estadisticas stats;
+    stats.proceso = my_rank;
+    stats.tipo = PI_TYPE;
+    stats.tiempo = 0;
+    stats.intentos = 0;
+    stats.send = 0;
+    stats.recv = 0;
+    stats.probes = 0;
+    stats.numero = 0;
+
+    int instruccion;
+    MPI_Status status;
+
+    //esperar instruccion de finalizar
+    MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, &status);
+
+    //enviar estadisticas
+    MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
+    return;
+
 }
 
 
