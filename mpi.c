@@ -2,11 +2,15 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <math.h>
 
 #define MAX 999999
 #define N_NUMEROS 20
+#define PESO_MIM 10000000
+#define PESO_MEDIO 10000
 
 /*INICIO definicion de tipos de proceso*/
 #define PES_RANK 0 // Asumimos que el PES tiene el rango 0
@@ -40,7 +44,8 @@
 MPI_Datatype Estadisticas_mpi;
 
 typedef struct {
-    float tiempo;
+    double tiempo;
+    double tiempo_c;
     int intentos;
     int send;
     int recv;
@@ -48,9 +53,14 @@ typedef struct {
     int tipo;
     int numero;
     int proceso;
+    int consultas;
 } Estadisticas;
 /*FIN struct con float para el tiempo, numero de intentos totales, numero de send, de recv y de probes*/
 
+/*INICIO Funciones auxiliares*/
+void fuerza_espera(unsigned long peso);
+double Wtime(void);
+/*FIN Funciones auxiliares*/
 
 /*INICIO funciones del proceso PES*/
 void PES_Code(int world_size, int num_pg, int num_pa);
@@ -86,18 +96,20 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
     // Definir un tipo de dato MPI correspondiente al struct Estadisticas
-    MPI_Datatype types[8] = {MPI_FLOAT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
-    int block_lengths[8] = {1, 1, 1, 1, 1, 1, 1, 1};
-    MPI_Aint offsets[8];
+    MPI_Datatype types[10] = {MPI_DOUBLE, MPI_DOUBLE, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
+    int block_lengths[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    MPI_Aint offsets[10];
     offsets[0] = offsetof(Estadisticas, tiempo);
-    offsets[1] = offsetof(Estadisticas, intentos);
-    offsets[2] = offsetof(Estadisticas, send);
-    offsets[3] = offsetof(Estadisticas, recv);
-    offsets[4] = offsetof(Estadisticas, probes);
-    offsets[5] = offsetof(Estadisticas, tipo);
-    offsets[6] = offsetof(Estadisticas, numero);
-    offsets[7] = offsetof(Estadisticas, proceso);
-    MPI_Type_create_struct(7, block_lengths, offsets, types, &Estadisticas_mpi);
+    offsets[1] = offsetof(Estadisticas, tiempo_c);
+    offsets[2] = offsetof(Estadisticas, intentos);
+    offsets[3] = offsetof(Estadisticas, send);
+    offsets[4] = offsetof(Estadisticas, recv);
+    offsets[5] = offsetof(Estadisticas, probes);
+    offsets[6] = offsetof(Estadisticas, tipo);
+    offsets[7] = offsetof(Estadisticas, numero);
+    offsets[8] = offsetof(Estadisticas, proceso);
+    offsets[9] = offsetof(Estadisticas, consultas);
+    MPI_Type_create_struct(10, block_lengths, offsets, types, &Estadisticas_mpi);
     MPI_Type_commit(&Estadisticas_mpi);
 
     // Inicializar la semilla para la generación de números aleatorios
@@ -217,7 +229,7 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
     //imprimir estadisticas
     printf("Estadisticas de los PG\n");
     for(int i = 0; i < N_NUMEROS; i++){
-        printf("PG %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", estadisticas_pg[i].proceso, estadisticas_pg[i].tiempo, estadisticas_pg[i].intentos, estadisticas_pg[i].send, estadisticas_pg[i].recv, estadisticas_pg[i].probes, estadisticas_pg[i].numero);
+        printf("PG %d: Consultas_Disp: %d Tiempo: %f, Tiempo_Computo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", estadisticas_pg[i].proceso,estadisticas_pg[i].consultas, estadisticas_pg[i].tiempo,estadisticas_pg[i].tiempo_c, estadisticas_pg[i].intentos, estadisticas_pg[i].send, estadisticas_pg[i].recv, estadisticas_pg[i].probes, estadisticas_pg[i].numero);
     }
 
     printf("Estadisticas de los PA\n");
@@ -236,23 +248,28 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
 
 
 void PG_Code(int my_rank, int world_size) {
-    
     int estado;
     int proc_adv;
 	int num_pa;
     int numero;
     int instruccion;
-
+    double tiempo_total_i = 0.0;
+    double tiempo_computo_ = 0.0;
+    double tiempo_total_f;
+    double tiempo_computo_f;
+    
     // estadiaticas
     Estadisticas stats;
     stats.proceso = my_rank;
     stats.tipo = PG_TYPE;
     stats.tiempo = 0;
+    stats.tiempo_c = 0;
     stats.intentos = 0;
     stats.send = 0;
     stats.recv = 0;
     stats.probes = 0;
     stats.numero = 0;
+    stats.consultas = 0;
 
 	//recibimos el tamaño de los PA
 	MPI_Recv(&num_pa, 1, MPI_INT, PES_RANK, CONF_DATA_1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -266,13 +283,11 @@ void PG_Code(int my_rank, int world_size) {
 	MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     stats.numero = numero_adivinar;
 
-
     //solicitar asignacion, y ahora le pasamos los stats
     proc_adv = solicitarAsignacion(my_rank, num_pa, pa_ids, &stats);
-   
     estado = JUGANDO;
 
-
+    tiempo_total_i = Wtime();
     
     while(estado != FINALIZAR){
         switch (estado)
@@ -284,18 +299,21 @@ void PG_Code(int my_rank, int world_size) {
                 MPI_Recv(&numero, 1, MPI_INT, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 stats.recv++;
                 if(numero == numero_adivinar){
+                    fuerza_espera(PESO_MIM);
+                    tiempo_total_f = Wtime();
+                    stats.tiempo = tiempo_total_f - tiempo_total_i;
                     char respuesta = '=';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.send++;
                     estado = INTERMEDIO;
-                    
-
                 }else if(numero < numero_adivinar){
+                    fuerza_espera(PESO_MIM);
                     char respuesta = '+';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.intentos++;
                     stats.send++;
                 }else if(numero > numero_adivinar){
+                    fuerza_espera(PESO_MIM);
                     char respuesta = '-';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.intentos++;
@@ -307,6 +325,7 @@ void PG_Code(int my_rank, int world_size) {
             //enviar estadisticas
             stats.send++;
             stats.recv++;
+            stats.tiempo = tiempo_total_f - tiempo_total_i;
             MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
             //recibir instruccion
             MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -315,11 +334,13 @@ void PG_Code(int my_rank, int world_size) {
                 estado = JUGANDO;
                 //resetear las estadisticas
                 stats.tiempo = 0;
+                stats.tiempo_c = 0;
                 stats.intentos = 0;
                 stats.send = 0;
                 stats.recv = 0;
                 stats.probes = 0;
                 stats.numero = 0;
+                stats.consultas = 0;
 
                 //recibir el número numero_adivinar
                 MPI_Recv(&numero_adivinar, 1, MPI_INT, PES_RANK, CONF_DATA_3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -348,6 +369,7 @@ void PG_Code(int my_rank, int world_size) {
 }
 
 int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stats) {
+
     int asignado = 0; 
     int respuesta; 
     int proc_adv = -1; 
@@ -358,7 +380,7 @@ int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stat
         for(int i = 0; i < num_pa; i++) {
             // Envía solicitud de disponibilidad a cada PA
             MPI_Send(&my_rank, 1, MPI_INT, pa_ids[i], DISP_REQ, MPI_COMM_WORLD);
-            stats->send++;
+            stats->consultas++;
 
             // Espera la respuesta de cada PA
             MPI_Recv(&respuesta, 1, MPI_INT, pa_ids[i], DISP_RES, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -378,6 +400,11 @@ int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stat
 
 
 void PA_Code(int my_rank) {
+
+    double tiempo_total_i = 0.0;
+    double tiempo_total_f;
+    double tiempo_computo_i = 0.0;
+    double tiempo_computo_f;
     int instruccion;
     int disponible = 0;
     int fin = 1;
@@ -393,11 +420,15 @@ void PA_Code(int my_rank) {
     stats.proceso = my_rank;
     stats.tipo = PA_TYPE;
     stats.tiempo = 0;
+    stats.tiempo_c = 0;
     stats.intentos = 0;
     stats.send = 0;
     stats.recv = 0;
     stats.probes = 0;
     stats.numero = 0;
+    stats.consultas = 0;
+
+    tiempo_total_i = Wtime();
 
     while(fin != 0)
     {
@@ -453,7 +484,7 @@ void PA_Code(int my_rank) {
 
                     intento = (limite_inferior + limite_superior) / 2;
 
-                    //enviar el intento
+                    fuerza_espera(PESO_MEDIO);
                     MPI_Send(&intento, 1, MPI_INT, status.MPI_SOURCE, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.send++;
                     
@@ -465,6 +496,8 @@ void PA_Code(int my_rank) {
                 MPI_Recv(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD, &status);
                 if(instruccion == 0){
                     //enviar estadisticas
+                    tiempo_total_f = Wtime();
+                    stats.tiempo = tiempo_total_f - tiempo_total_i;
                     MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
                     return;
                 }
@@ -478,21 +511,33 @@ void PA_Code(int my_rank) {
 
 
 void PI_Code(int my_rank) {
+
+    double tiempo_total_i = 0.0;
+    double tiempo_total_f;
+
     Estadisticas stats;
     stats.proceso = my_rank;
     stats.tipo = PI_TYPE;
     stats.tiempo = 0;
+    stats.tiempo_c = 0;
     stats.intentos = 0;
     stats.send = 0;
     stats.recv = 0;
     stats.probes = 0;
     stats.numero = 0;
+    stats.consultas = 0;
 
     int instruccion;
     MPI_Status status;
 
+    tiempo_total_i = Wtime();
+
     //esperar instruccion de finalizar
     MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, &status);
+
+    tiempo_total_f = Wtime();
+
+    stats.tiempo = tiempo_total_f - tiempo_total_i;
 
     //enviar estadisticas
     MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
@@ -500,4 +545,15 @@ void PI_Code(int my_rank) {
 
 }
 
+void fuerza_espera(unsigned long peso)
+{
+    for (unsigned long i=1; i<1*peso; i++) sqrt(i);
+}
 
+double Wtime(void) {
+  struct timeval tv;
+  if(gettimeofday(&tv, 0) < 0) {
+    perror("oops");
+  }
+  return (double)tv.tv_sec + (0.000001 * (double)tv.tv_usec);
+}
