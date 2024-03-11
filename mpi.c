@@ -8,7 +8,7 @@
 #include <math.h>
 
 #define MAX 999999
-#define N_NUMEROS 20
+#define N_NUMEROS 200
 #define PESO_MIM 10000000
 #define PESO_MEDIO 10000
 
@@ -234,7 +234,7 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
 
     printf("Estadisticas de los PA\n");
     for(int i = 0; i < num_pa; i++){
-        printf("PA %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", array_pa_ids[i], estadisticas_pa[i].tiempo, estadisticas_pa[i].intentos, estadisticas_pa[i].send, estadisticas_pa[i].recv, estadisticas_pa[i].probes, estadisticas_pa[i].numero);
+        printf("PA %d: Tiempo: %f, Tiempo_Computo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", array_pa_ids[i], estadisticas_pa[i].tiempo, estadisticas_pa[i].tiempo_c, estadisticas_pa[i].intentos, estadisticas_pa[i].send, estadisticas_pa[i].recv, estadisticas_pa[i].probes, estadisticas_pa[i].numero);
     }
 
     printf("Estadisticas de los PI\n");
@@ -254,9 +254,8 @@ void PG_Code(int my_rank, int world_size) {
     int numero;
     int instruccion;
     double tiempo_total_i = 0.0;
-    double tiempo_computo_ = 0.0;
+    double tiempo_computo_i = 0.0;
     double tiempo_total_f;
-    double tiempo_computo_f;
     
     // estadiaticas
     Estadisticas stats;
@@ -298,9 +297,11 @@ void PG_Code(int my_rank, int world_size) {
             {
                 MPI_Recv(&numero, 1, MPI_INT, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 stats.recv++;
+                tiempo_computo_i = Wtime();
                 if(numero == numero_adivinar){
                     fuerza_espera(PESO_MIM);
                     tiempo_total_f = Wtime();
+                    stats.tiempo_c = stats.tiempo_c + (Wtime() - tiempo_computo_i);
                     stats.tiempo = tiempo_total_f - tiempo_total_i;
                     char respuesta = '=';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
@@ -308,12 +309,14 @@ void PG_Code(int my_rank, int world_size) {
                     estado = INTERMEDIO;
                 }else if(numero < numero_adivinar){
                     fuerza_espera(PESO_MIM);
+                    stats.tiempo_c = stats.tiempo_c + (Wtime() - tiempo_computo_i);
                     char respuesta = '+';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.intentos++;
                     stats.send++;
                 }else if(numero > numero_adivinar){
                     fuerza_espera(PESO_MIM);
+                    stats.tiempo_c = stats.tiempo_c + (Wtime() - tiempo_computo_i);
                     char respuesta = '-';
                     MPI_Send(&respuesta, 1, MPI_CHAR, proc_adv, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.intentos++;
@@ -467,6 +470,7 @@ void PA_Code(int my_rank) {
                 intento = (limite_inferior + limite_superior) / 2;      
                 while (limite_inferior <= limite_superior)
                 {
+                    tiempo_computo_i = Wtime();
                     //recibir la respuesta
                     MPI_Recv(&respuesta, 1, MPI_CHAR, status.MPI_SOURCE, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD, &status);
                     stats.recv++;
@@ -487,7 +491,8 @@ void PA_Code(int my_rank) {
                     fuerza_espera(PESO_MEDIO);
                     MPI_Send(&intento, 1, MPI_INT, status.MPI_SOURCE, RESPUESTA_ADIVINANZA, MPI_COMM_WORLD);
                     stats.send++;
-                    
+                    stats.tiempo_c = stats.tiempo_c + (Wtime() - tiempo_computo_i);
+
                     break;
                     
                 }
