@@ -95,9 +95,6 @@ void PI_Code(int my_rank);
 
 int main(int argc, char** argv) {
 
-	int num_pg = atoi(argv[1]);
-	int num_pa = atoi(argv[2]);
-
     MPI_Init(&argc, &argv);
 
     int world_size;
@@ -105,6 +102,15 @@ int main(int argc, char** argv) {
 
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+
+    if(world_size < atoi(argv[1]) + atoi(argv[2]) + 1) {
+        if(my_rank == 0) {
+            printf("El número de procesos debe ser mayor o igual a la suma de PG y PA más el PES\n");
+        }
+        MPI_Finalize();
+        return 0;
+    }
+
 
     // Definir un tipo de dato MPI correspondiente al struct Estadisticas
     MPI_Datatype types[10] = {MPI_DOUBLE, MPI_DOUBLE, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_INT};
@@ -127,6 +133,10 @@ int main(int argc, char** argv) {
     srand(time(NULL) + my_rank);
 
     if (my_rank == PES_RANK) { // Si el proceso es el PES
+        
+        int num_pg = atoi(argv[1]);
+        int num_pa = atoi(argv[2]);
+
         PES_Code(world_size, num_pg, num_pa);
     } else {
         // Esperar a recibir el tipo de proceso asignado
