@@ -7,7 +7,7 @@
 #include <math.h>
 
 #define MAX 999999
-#define N_NUMEROS 40
+#define N_NUMEROS 20
 #define PESO_MIM 1000000
 #define PESO_MEDIO 10000
 
@@ -335,7 +335,7 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
     t_total = t_fin - t_inicio;
 
     
-    printf("Estadísticas de los PG\n");
+    printf("Estadísticas parciales\n");
     printf("%-5s %-17s %-9s %-17s %-9s %-17s\n", "PG", "Consultas_Disp", "Tiempo", "Tiempo_Computo", "Intentos", "Numero_Adivinado");
     for(int i = 0; i < N_NUMEROS; i++){
         printf("%-5d %-17d %-9f %-17f %-9d %-17d\n", estadisticas_pg[i].proceso, estadisticas_pg[i].consultas, estadisticas_pg[i].tiempo, estadisticas_pg[i].tiempo_c, estadisticas_pg[i].intentos, estadisticas_pg[i].numero);
@@ -436,13 +436,11 @@ void PG_Code(int my_rank, int world_size) {
             break;
         case INTERMEDIO:
             //enviar estadisticas
-            stats.send++;
-            stats.recv++;
+
             stats.tiempo = tiempo_total_f - tiempo_total_i;
             MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
             //recibir instruccion
             MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            printf("PG %dInstruccion recibida: %d\n", my_rank, instruccion);
 
             //confirmar instruccion
             MPI_Send(&instruccion, 1, MPI_INT, PES_RANK, RESPUESTA_INSTRUCCION, MPI_COMM_WORLD);
@@ -501,7 +499,6 @@ int solicitarAsignacion(int my_rank, int num_pa, int *pa_ids, Estadisticas *stat
 
             // Espera la respuesta de cada PA
             MPI_Recv(&respuesta, 1, MPI_INT, pa_ids[i], DISP_RES, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            stats->recv++;
 
              if(respuesta == 0) { 
                 asignado = 1; 
