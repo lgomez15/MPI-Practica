@@ -7,7 +7,7 @@
 #include <math.h>
 
 #define MAX 999999
-#define N_NUMEROS 10
+#define N_NUMEROS 40
 #define PESO_MIM 1000000
 #define PESO_MEDIO 10000
 
@@ -29,6 +29,7 @@
 #define RESPUESTA_ADIVINANZA 7
 #define ESTADISTICAS 8
 #define INSTRUCCION 9
+#define RESPUESTA_INSTRUCCION 111
 /*INICIO definicion de tipos de comunicacion*/
 
 /*INICIO definicion de estados*/
@@ -229,12 +230,17 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
             instruccion = 0;
             for(int i = 1; i <= num_pg; i++) {
                 MPI_Send(&instruccion, 1, MPI_INT, i, INSTRUCCION, MPI_COMM_WORLD);
+                //recibir respuesta instrucción
+                MPI_Recv(&instruccion, 1, MPI_INT, i, RESPUESTA_INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
             break;
         }else{
             //enviar instruccion
             instruccion = 1;
             MPI_Send(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD);
+
+            //esperar confirmacion de instruccion
+            MPI_Recv(&instruccion, 1, MPI_INT, status.MPI_SOURCE, RESPUESTA_INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
             //enviar el siguiente numero
             random = rand() % MAX;
@@ -330,7 +336,9 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
     for(int i = 0; i < world_size -1; i++){
         printf("%-5d %-5d %-9f %-17f %-27f %-5d %-5d %-7d\n", estadisticas_finales[i].num_proc, estadisticas_finales[i].tipo, estadisticas_finales[i].tt, estadisticas_finales[i].tt_computo, estadisticas_finales[i].ptc, estadisticas_finales[i].send, estadisticas_finales[i].recv, estadisticas_finales[i].probes);
     }
+    printf("\n+--------------------------------------+\n");
     printf("Tiempo total: %f\n", t_total);
+    printf("+--------------------------------------+\n");
 
     
 
@@ -425,6 +433,10 @@ void PG_Code(int my_rank, int world_size) {
             //recibir instruccion
             MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             printf("PG %dInstruccion recibida: %d\n", my_rank, instruccion);
+
+            //confirmar instruccion
+            MPI_Send(&instruccion, 1, MPI_INT, PES_RANK, RESPUESTA_INSTRUCCION, MPI_COMM_WORLD);
+
 
             if(instruccion == 1){
                 estado = JUGANDO;
