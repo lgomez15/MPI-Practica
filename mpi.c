@@ -1,5 +1,4 @@
 #include <mpi.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -8,8 +7,8 @@
 #include <math.h>
 
 #define MAX 999999
-#define N_NUMEROS 200
-#define PESO_MIM 10000000
+#define N_NUMEROS 10
+#define PESO_MIM 1000000
 #define PESO_MEDIO 10000
 
 /*INICIO definicion de tipos de proceso*/
@@ -55,6 +54,17 @@ typedef struct {
     int proceso;
     int consultas;
 } Estadisticas;
+
+typedef struct {
+    int num_proc;
+    int tipo;
+    double tt;
+    double tt_computo;
+    double ptc;
+    int send;
+    int recv;
+    int probes;
+} Estadisticas_Finales;
 /*FIN struct con float para el tiempo, numero de intentos totales, numero de send, de recv y de probes*/
 
 /*INICIO Funciones auxiliares*/
@@ -137,11 +147,38 @@ int main(int argc, char** argv) {
 
 void PES_Code(int world_size, int num_pg, int num_pa) {
 
+    double t_inicio = Wtime();
+    double t_fin;
+    double t_total;
     //array de estadisticas del tamano de N_NUMEROS
     Estadisticas estadisticas_pg[N_NUMEROS];
     Estadisticas estadisticas_pa[num_pa];
     Estadisticas estadisticas_pi;
     int num_pi = world_size - (num_pa + num_pg);
+
+
+    printf("+--------------------------------------+\n");
+    printf("| Numero de procesos: %d\n", world_size);
+    printf("| Numero de PG: %d\n", num_pg);
+    printf("| Numero de PA: %d\n", num_pa);
+    printf("| Numero de PI: %d\n", num_pi);
+    printf("+--------------------------------------+\n");
+
+    // Imprimir información detallada de cada proceso
+    for (int i = 0; i < world_size; i++) {
+        printf("| P%d: ", i);
+        if (i == 0) {
+            printf("PES\n");
+        } else if (i <= num_pg && i > 0) {
+            printf("PG\n");
+        } else if (i <= num_pg + num_pa && i > num_pg) {
+            printf("PA\n");
+        } else {
+            printf("PI\n");
+        }
+    }
+    printf("+--------------------------------------+\n");
+
     
     // Asignar y enviar roles a PG y PA
     for (int i = 1; i < world_size; i++) {
@@ -194,15 +231,15 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
                 MPI_Send(&instruccion, 1, MPI_INT, i, INSTRUCCION, MPI_COMM_WORLD);
             }
             break;
+        }else{
+            //enviar instruccion
+            instruccion = 1;
+            MPI_Send(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD);
+
+            //enviar el siguiente numero
+            random = rand() % MAX;
+            MPI_Send(&random, 1, MPI_INT, status.MPI_SOURCE, CONF_DATA_3, MPI_COMM_WORLD);
         }
-
-        //enviar instruccion
-        instruccion = 1;
-        MPI_Send(&instruccion, 1, MPI_INT, status.MPI_SOURCE, INSTRUCCION, MPI_COMM_WORLD);
-
-        //enviar el siguiente numero
-        random = rand() % MAX;
-        MPI_Send(&random, 1, MPI_INT, status.MPI_SOURCE, CONF_DATA_3, MPI_COMM_WORLD);
         
     }
 
@@ -224,23 +261,78 @@ void PES_Code(int world_size, int num_pg, int num_pa) {
         MPI_Recv(&received_stats, 1, Estadisticas_mpi, i, ESTADISTICAS, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         estadisticas_pi = received_stats;
     }
+
+    //array de estadisticas totales para todos los procesos
+    Estadisticas_Finales estadisticas_finales[world_size -1];
+
+    //llenar el array de estadisticas finales con la info de los PG
+    for(int i = 0 ; i < num_pg; i++){
+        estadisticas_finales[i].num_proc = i+1;
+        estadisticas_finales[i].tipo = PG_TYPE;
+        estadisticas_finales[i].tt = 0;
+        estadisticas_finales[i].tt_computo = 0;
+        estadisticas_finales[i].ptc = 0;
+        estadisticas_finales[i].send = 0;
+        estadisticas_finales[i].recv = 0;
+        estadisticas_finales[i].probes = 0;
+
+        for(int j =0; j < N_NUMEROS; j++)
+        {
+            if( estadisticas_finales[i].num_proc == estadisticas_pg[j].proceso)
+            {
+                estadisticas_finales[i].tt = estadisticas_finales[i].tt + estadisticas_pg[j].tiempo;
+                estadisticas_finales[i].tt_computo = estadisticas_finales[i].tt_computo + estadisticas_pg[j].tiempo_c;
+                estadisticas_finales[i].send = estadisticas_finales[i].send + estadisticas_pg[j].send;
+                estadisticas_finales[i].recv = estadisticas_finales[i].recv + estadisticas_pg[j].recv;
+                estadisticas_finales[i].probes = estadisticas_finales[i].probes + estadisticas_pg[j].probes;
+            }
+        }
+
+        estadisticas_finales[i].ptc = (estadisticas_finales[i].tt_computo / estadisticas_finales[i].tt) * 100;
+    }
+
+    //llenar el array de estadisticas finales con la info de los PA
+    for(int i = num_pg; i < num_pg + num_pa; i++){
+        estadisticas_finales[i].num_proc = array_pa_ids[i - num_pg];
+        estadisticas_finales[i].tipo = PA_TYPE;
+        estadisticas_finales[i].tt = estadisticas_pa[i - num_pg].tiempo;
+        estadisticas_finales[i].tt_computo = estadisticas_pa[i - num_pg].tiempo_c;
+        estadisticas_finales[i].ptc = (estadisticas_pa[i - num_pg].tiempo_c / estadisticas_pa[i - num_pg].tiempo) * 100;
+        estadisticas_finales[i].send = estadisticas_pa[i - num_pg].send;
+        estadisticas_finales[i].recv = estadisticas_pa[i - num_pg].recv;
+        estadisticas_finales[i].probes = estadisticas_pa[i - num_pg].probes;
+    }
+
+    //llenar el array de estadisticas finales con la info de los PI
+    for(int i = num_pg + num_pa; i < world_size - 1; i++){
+        estadisticas_finales[i].num_proc = i + 1;
+        estadisticas_finales[i].tipo = PI_TYPE;
+        estadisticas_finales[i].tt = estadisticas_pi.tiempo;
+        estadisticas_finales[i].tt_computo = estadisticas_pi.tiempo_c;
+        estadisticas_finales[i].ptc = (estadisticas_pi.tiempo_c / estadisticas_pi.tiempo) * 100;
+        estadisticas_finales[i].send = estadisticas_pi.send;
+        estadisticas_finales[i].recv = estadisticas_pi.recv;
+        estadisticas_finales[i].probes = estadisticas_pi.probes;
+    }
+
+    t_fin = Wtime();
+    t_total = t_fin - t_inicio;
+
     
-
-    //imprimir estadisticas
-    printf("Estadisticas de los PG\n");
+    printf("Estadísticas de los PG\n");
+    printf("%-5s %-17s %-9s %-17s %-9s %-17s\n", "PG", "Consultas_Disp", "Tiempo", "Tiempo_Computo", "Intentos", "Numero_Adivinado");
     for(int i = 0; i < N_NUMEROS; i++){
-        printf("PG %d: Consultas_Disp: %d Tiempo: %f, Tiempo_Computo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", estadisticas_pg[i].proceso,estadisticas_pg[i].consultas, estadisticas_pg[i].tiempo,estadisticas_pg[i].tiempo_c, estadisticas_pg[i].intentos, estadisticas_pg[i].send, estadisticas_pg[i].recv, estadisticas_pg[i].probes, estadisticas_pg[i].numero);
+        printf("%-5d %-17d %-9f %-17f %-9d %-17d\n", estadisticas_pg[i].proceso, estadisticas_pg[i].consultas, estadisticas_pg[i].tiempo, estadisticas_pg[i].tiempo_c, estadisticas_pg[i].intentos, estadisticas_pg[i].numero);
     }
 
-    printf("Estadisticas de los PA\n");
-    for(int i = 0; i < num_pa; i++){
-        printf("PA %d: Tiempo: %f, Tiempo_Computo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", array_pa_ids[i], estadisticas_pa[i].tiempo, estadisticas_pa[i].tiempo_c, estadisticas_pa[i].intentos, estadisticas_pa[i].send, estadisticas_pa[i].recv, estadisticas_pa[i].probes, estadisticas_pa[i].numero);
+    printf("\nEstadísticas finales\n");
+    printf("%-5s %-5s %-9s %-17s %-27s %-5s %-5s %-7s\n", "PG", "tipo", "Tiempo", "Tiempo_Computo", "Porcentaje_Tiempo_Computo", "Send", "Recv", "Probes");
+    for(int i = 0; i < world_size -1; i++){
+        printf("%-5d %-5d %-9f %-17f %-27f %-5d %-5d %-7d\n", estadisticas_finales[i].num_proc, estadisticas_finales[i].tipo, estadisticas_finales[i].tt, estadisticas_finales[i].tt_computo, estadisticas_finales[i].ptc, estadisticas_finales[i].send, estadisticas_finales[i].recv, estadisticas_finales[i].probes);
     }
+    printf("Tiempo total: %f\n", t_total);
 
-    printf("Estadisticas de los PI\n");
-    for (int i = num_pg + num_pa + 1; i < world_size; i++) {
-        printf("PI %d: Tiempo: %f, Intentos: %d, Send: %d, Recv: %d, Probes: %d, Numero: %d\n", i, estadisticas_pi.tiempo, estadisticas_pi.intentos, estadisticas_pi.send, estadisticas_pi.recv, estadisticas_pi.probes, estadisticas_pi.numero);
-    }
+    
 
     free(array_pa_ids); // No olvides liberar la memoria
     return;
@@ -332,6 +424,7 @@ void PG_Code(int my_rank, int world_size) {
             MPI_Send(&stats, 1, Estadisticas_mpi, PES_RANK, ESTADISTICAS, MPI_COMM_WORLD);
             //recibir instruccion
             MPI_Recv(&instruccion, 1, MPI_INT, PES_RANK, INSTRUCCION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            printf("PG %dInstruccion recibida: %d\n", my_rank, instruccion);
 
             if(instruccion == 1){
                 estado = JUGANDO;
@@ -361,7 +454,6 @@ void PG_Code(int my_rank, int world_size) {
             break;
             case FINALIZAR:
                 return;
-
             break;        
         default:
             printf("Error en el estado\n");
